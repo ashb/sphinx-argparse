@@ -1,49 +1,11 @@
 """Test the HTML builder and check output against XPath."""
 
-import re
+import posixpath
 
 import pytest
+from sphinx.util.inventory import InventoryFile
 
-
-def check_xpath(etree, fname, path, check, be_found=True):
-    nodes = list(etree.xpath(path))
-    if check is None:
-        assert nodes == [], f'found any nodes matching xpath {path!r} in file {fname}'
-        return
-    else:
-        assert nodes != [], f'did not find any node matching xpath {path!r} in file {fname}'
-    if callable(check):
-        check(nodes)
-    elif not check:
-        # only check for node presence
-        pass
-    else:
-
-        def get_text(node):
-            if node.text is not None:
-                # the node has only one text
-                return node.text
-            else:
-                # the node has tags and text; gather texts just under the node
-                return ''.join(n.tail or '' for n in node)
-
-        rex = re.compile(check)
-        if be_found:
-            if any(rex.search(get_text(node)) for node in nodes):
-                return
-            msg = (
-                f'{check!r} not found in any node matching path {path} in {fname}: '
-                f'{[node.text for node in nodes]!r}'
-            )
-        else:
-            if all(not rex.search(get_text(node)) for node in nodes):
-                return
-            msg = (
-                f'Found {check!r} in a node matching path {path} in {fname}: '
-                f'{[node.text for node in nodes]!r}'
-            )
-
-        raise AssertionError(msg)
+from test.utils.xpath import check_xpath
 
 
 @pytest.mark.parametrize(
@@ -56,12 +18,21 @@ def check_xpath(etree, fname, path, check, be_found=True):
                 ('.//h1', 'blah-blah', False),
                 (".//div[@class='highlight']//span", 'usage'),
                 ('.//h2', 'Positional Arguments'),
-                (".//section[@id='positional-arguments']", ''),
-                (".//section[@id='positional-arguments']/dl/dt[1]/kbd", 'foo2 metavar'),
-                (".//section[@id='named-arguments']", ''),
-                (".//section[@id='named-arguments']/dl/dt[1]/kbd", '--foo'),
-                (".//section[@id='bar-options']", ''),
-                (".//section[@id='bar-options']/dl/dt[1]/kbd", '--bar'),
+                (".//section[@id='sample-directive-opts-positional-arguments']", ''),
+                (".//section/span[@id='positional-arguments']", ''),
+                (
+                    ".//section[@id='sample-directive-opts-positional-arguments']/dl/dt[1]/kbd",
+                    'foo2 metavar',
+                ),
+                (".//section[@id='sample-directive-opts-named-arguments']", ''),
+                (".//section/span[@id='named-arguments']", ''),
+                (
+                    ".//section[@id='sample-directive-opts-named-arguments']/dl/dt[1]/kbd",
+                    '--foo',
+                ),
+                (".//section[@id='sample-directive-opts-bar-options']", ''),
+                (".//section[@id='sample-directive-opts-bar-options']/dl/dt[1]/kbd", '--bar'),
+                (".//section[@id='link-check']/p[1]/a[@href='#sample-directive-opts-A']", ''),
             ],
         ),
         (
@@ -71,8 +42,12 @@ def check_xpath(etree, fname, path, check, be_found=True):
                 ('.//h1', 'Command A'),
                 (".//div[@class='highlight']//span", 'usage'),
                 ('.//h2', 'Positional Arguments'),
-                (".//section[@id='positional-arguments']", ''),
-                (".//section[@id='positional-arguments']/dl/dt[1]/kbd", 'baz'),
+                (".//section[@id='sample-directive-opts-A-positional-arguments']", ''),
+                (".//section/span[@id='positional-arguments']", ''),
+                (
+                    ".//section[@id='sample-directive-opts-A-positional-arguments']/dl/dt[1]/kbd",
+                    'baz',
+                ),
             ],
         ),
         (
@@ -103,3 +78,41 @@ def test_default_html(app, cached_etree_parse, fname, expect_list):
     print(app.outdir / fname)
     for expect in expect_list:
         check_xpath(cached_etree_parse(app.outdir / fname), fname, *expect)
+
+
+@pytest.mark.sphinx('html', testroot='default-html')
+def test_index_is_optional(app, cached_etree_parse):
+    app.build()
+    index_file = app.outdir / 'index.html'
+    assert index_file.exists() is True  # Confirm that the build occurred.
+
+    command_index_file = app.outdir / 'commands-index.html'
+    assert command_index_file.exists() is False
+
+
+@pytest.mark.sphinx('html', testroot='default-html')
+def test_object_inventory(app, cached_etree_parse):
+    app.build()
+    inventory_file = app.outdir / 'objects.inv'
+    assert inventory_file.exists() is True
+
+    with inventory_file.open('rb') as f:
+        inv = InventoryFile.load(f, 'test/path', posixpath.join)
+
+    assert 'sample-directive-opts' in inv.get('commands:command')
+    assert (
+        'test/path/index.html#sample-directive-opts'
+        == inv['commands:command']['sample-directive-opts'][2]
+    )
+
+    assert 'sample-directive-opts A' in inv.get('commands:command')
+    assert (
+        'test/path/subcommand-a.html#sample-directive-opts-A'
+        == inv['commands:command']['sample-directive-opts A'][2]
+    )
+
+    assert 'sample-directive-opts B' in inv.get('commands:command')
+    assert (
+        'test/path/index.html#sample-directive-opts-B'
+        == inv['commands:command']['sample-directive-opts B'][2]
+    )
